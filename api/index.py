@@ -1,4 +1,4 @@
-lfrom fastapi import FastAPI
+from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 import re
@@ -32,12 +32,12 @@ button:hover{background:#005bb5}
 <div id="output"></div>
 <script>
 async function sendText(){
-  const t=document.getElementById('inputText').value;
-  const o=document.getElementById('output');
+  var t=document.getElementById('inputText').value;
+  var o=document.getElementById('output');
   o.textContent='در حال پردازش...';
   try{
-    const r=await fetch('/api/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
-    const d=await r.json();
+    var r=await fetch('/api/process',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:t})});
+    var d=await r.json();
     o.textContent=d.success?d.text:'خطا: '+(d.error||'ناشناخته');
   }catch(e){o.textContent='خطای شبکه: '+e.message}
 }
