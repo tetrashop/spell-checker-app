@@ -5,18 +5,34 @@ from mangum import Mangum
 import re
 import logging
 
-# --- ایمپورت کتابخانه‌ها ---
-from spellchecker import SpellChecker
-from pyarabic import araby
-from hazm_normalizer import Normalizer as HazmNormalizer
-
+# --- تنظیمات لاگینگ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- مقداردهی اولیه ---
-hazm_norm = HazmNormalizer()
-en_checker = SpellChecker(language='en')
-ar_checker = SpellChecker(language='ar')
+# --- ایمپورت کتابخانه‌ها با مدیریت خطا (Anti-Crash) ---
+try:
+    from spellchecker import SpellChecker
+    en_checker = SpellChecker(language='en')
+    ar_checker = SpellChecker(language='ar')
+    PYSPELL_AVAILABLE = True
+except ImportError:
+    PYSPELL_AVAILABLE = False
+    logger.warning("pyspellchecker not available.")
+
+try:
+    from pyarabic import araby
+    PYARABIC_AVAILABLE = True
+except ImportError:
+    PYARABIC_AVAILABLE = False
+    logger.warning("PyArabic not available.")
+
+try:
+    from hazm import Normalizer as HazmNormalizer
+    hazm_norm = HazmNormalizer()
+    HAZM_AVAILABLE = True
+except ImportError:
+    HAZM_AVAILABLE = False
+    logger.warning("hazm not available.")
 
 app = FastAPI()
 
@@ -195,14 +211,15 @@ def fix_repeated_chars(text: str, is_persian_arabic: bool) -> str:
     اگر ۳ بار یا بیشتر تکرار شده باشد (مثل سسسلام) آن را به ۱ حرف کاهش می‌دهد.
     """
     if is_persian_arabic:
-        # محدوده یونیکد فارسی و عربی
         return re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
     else:
-        # حروف انگلیسی و ترکی
         return re.sub(r'([a-zA-ZçğıöşüÇĞİÖŞÜ])\1{2,}', r'\1', text)
 
 def correct_with_pyspell(text: str, checker) -> str:
     """غلط‌یابی کلمه به کلمه با حفظ علائم نگارشی و حروف بزرگ"""
+    if not checker:
+        return text
+        
     words = text.split()
     corrected_words = []
     for word in words:
@@ -210,13 +227,11 @@ def correct_with_pyspell(text: str, checker) -> str:
         match = re.match(r'^([^\w\u0600-\u06FF]*)([\w\u0600-\u06FF]+)([^\w\u0600-\u06FF]*)$', word)
         if match:
             prefix, clean_word, suffix = match.groups()
-            # اگر کلمه در دیکشنری بود، دست نزن
             if clean_word.lower() in checker:
                 corrected_words.append(word)
             else:
                 correction = checker.correction(clean_word.lower())
                 if correction:
-                    # حفظ حرف بزرگ اول در انگلیسی
                     if clean_word[0].isupper():
                         correction = correction.capitalize()
                     corrected_words.append(f"{prefix}{correction}{suffix}")
@@ -243,26 +258,25 @@ def process_mixed_text(text: str) -> str:
         has_english = bool(re.search(r'[a-zA-Z]', line))
 
         if has_persian or (has_arabic and not has_persian and not has_english):
-            # خط فارسی است (وجود حروف خاص فارسی، یا فقط حروف مشترک با عربی بدون حروف لاتین)
             if has_persian:
                 line = fix_repeated_chars(line, is_persian_arabic=True)
-                line = hazm_norm.normalize(line) # اصلاح نیم‌فاصله
+                if HAZM_AVAILABLE:
+                    line = hazm_norm.normalize(line)
             else:
-                # ممکن است عربی باشد
                 line = fix_repeated_chars(line, is_persian_arabic=True)
-                line = araby.normalize_hamza(line)
-                line = araby.strip_tashkeel(line)
-                line = correct_with_pyspell(line, ar_checker)
+                if PYARABIC_AVAILABLE:
+                    line = araby.normalize_hamza(line)
+                    line = araby.strip_tashkeel(line)
+                if PYSPELL_AVAILABLE:
+                    line = correct_with_pyspell(line, ar_checker)
                 
         elif has_english and not has_turkish:
-            # خط انگلیسی است
             line = fix_repeated_chars(line, is_persian_arabic=False)
-            line = correct_with_pyspell(line, en_checker)
+            if PYSPELL_AVAILABLE:
+                line = correct_with_pyspell(line, en_checker)
             
         elif has_turkish:
-            # خط ترکی است
             line = fix_repeated_chars(line, is_persian_arabic=False)
-            # برای ترکی فعلاً فقط حروف تکراری را اصلاح می‌کنیم چون Zemberek روی Vercel سنگین است
             
         processed_lines.append(line)
         
@@ -272,15 +286,19 @@ def process_single_language(text: str, lang: str) -> str:
     """پردازش متن وقتی کاربر زبان را دستی انتخاب می‌کند"""
     if lang == 'fa':
         text = fix_repeated_chars(text, is_persian_arabic=True)
-        text = hazm_norm.normalize(text)
+        if HAZM_AVAILABLE:
+            text = hazm_norm.normalize(text)
     elif lang == 'ar':
         text = fix_repeated_chars(text, is_persian_arabic=True)
-        text = araby.normalize_hamza(text)
-        text = araby.strip_tashkeel(text)
-        text = correct_with_pyspell(text, ar_checker)
+        if PYARABIC_AVAILABLE:
+            text = araby.normalize_hamza(text)
+            text = araby.strip_tashkeel(text)
+        if PYSPELL_AVAILABLE:
+            text = correct_with_pyspell(text, ar_checker)
     elif lang == 'en':
         text = fix_repeated_chars(text, is_persian_arabic=False)
-        text = correct_with_pyspell(text, en_checker)
+        if PYSPELL_AVAILABLE:
+            text = correct_with_pyspell(text, en_checker)
     return text
 
 # --- هندلر Vercel ---
