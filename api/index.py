@@ -1,22 +1,19 @@
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from mangum import Mangum
 import re
 import logging
 
-from langdetect import detect, DetectorFactory
-DetectorFactory.seed = 0  # برای پایداری تشخیص زبان
-
+# --- ایمپورت کتابخانه‌ها ---
 from spellchecker import SpellChecker
 from pyarabic import araby
 from hazm_normalizer import Normalizer as HazmNormalizer
 
-# --- تنظیمات لاگینگ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- مقداردهی اولیه ابزارها ---
+# --- مقداردهی اولیه ---
 hazm_norm = HazmNormalizer()
 en_checker = SpellChecker(language='en')
 ar_checker = SpellChecker(language='ar')
@@ -27,58 +24,74 @@ class TextInput(BaseModel):
     text: str
     language: str = "auto"
 
-# --- صفحه HTML با دکمه کپی ---
+# --- رابط کاربری HTML (مدرن و حرفه‌ای) ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>غلط‌یاب و نرمال‌ساز هوشمند</title>
+<title>سیستم جامع غلط‌یاب و نرمال‌ساز</title>
 <style>
-    body { font-family: Tahoma, Arial, sans-serif; max-width: 900px; margin: 30px auto; padding: 15px; background: #f0f2f5; color: #333; }
-    .container { background: #fff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); padding: 25px; }
-    h2 { text-align: center; color: #1a73e8; margin-bottom: 20px; }
-    label { display: block; margin-bottom: 8px; font-weight: bold; }
-    select, textarea, button { width: 100%; box-sizing: border-box; }
-    select, textarea { padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; margin-bottom: 15px; font-family: inherit; }
-    textarea { height: 250px; resize: vertical; direction: auto; line-height: 1.6; }
-    button { padding: 14px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s; font-weight: bold; }
-    button:hover { background: #1557b0; }
-    button:disabled { background: #a0c3ff; cursor: not-allowed; }
-    .output-header { display: flex; justify-content: space-between; align-items: center; margin-top: 25px; margin-bottom: 10px; }
-    .output-header h3 { margin: 0; }
-    .badge { background: #e8f0fe; color: #1a73e8; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: bold; }
-    #output { background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 15px; min-height: 150px; white-space: pre-wrap; direction: auto; font-size: 15px; line-height: 1.8; }
-    .copy-btn { margin-top: 10px; background: #34a853; display: none; }
-    .copy-btn:hover { background: #2b8a44; }
-    .status { margin-top: 10px; font-size: 14px; color: #666; text-align: center; }
+    :root { --primary: #1a73e8; --primary-hover: #1557b0; --bg: #f0f2f5; --text: #333; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 900px; margin: 20px auto; padding: 15px; background: var(--bg); color: var(--text); }
+    .container { background: #fff; border-radius: 16px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); padding: 30px; }
+    h2 { text-align: center; color: var(--primary); margin-bottom: 25px; font-weight: 600; }
+    label { display: block; margin-bottom: 8px; font-weight: 500; font-size: 15px; }
+    select, textarea { width: 100%; box-sizing: border-box; padding: 14px; border: 1px solid #dadce0; border-radius: 10px; font-size: 15px; margin-bottom: 20px; font-family: inherit; transition: border 0.3s; }
+    select:focus, textarea:focus { border-color: var(--primary); outline: none; }
+    textarea { height: 220px; resize: vertical; direction: auto; line-height: 1.8; background-color: #fafafa; }
+    .btn-group { display: flex; gap: 12px; margin-bottom: 20px; }
+    button { padding: 14px; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; transition: all 0.3s; font-weight: bold; flex: 1; display: flex; justify-content: center; align-items: center; }
+    .btn-primary { background: var(--primary); color: white; }
+    .btn-primary:hover { background: var(--primary-hover); transform: translateY(-1px); }
+    .btn-primary:disabled { background: #a0c3ff; cursor: not-allowed; transform: none; }
+    .btn-danger { background: #ea4335; color: white; }
+    .btn-danger:hover { background: #c5221f; }
+    .btn-success { background: #34a853; color: white; display: none; }
+    .btn-success:hover { background: #2b8a44; }
+    .output-container { background: #f8f9fa; border: 1px solid #e8eaed; border-radius: 10px; padding: 20px; min-height: 150px; white-space: pre-wrap; direction: auto; font-size: 16px; line-height: 1.8; color: #202124; }
+    .header-flex { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .badge { background: #e8f0fe; color: var(--primary); padding: 6px 14px; border-radius: 20px; font-size: 13px; font-weight: bold; display: none; }
+    .status { margin-top: 15px; font-size: 14px; color: #5f6368; text-align: center; font-weight: 500; }
 </style>
 </head>
 <body>
 <div class="container">
-    <h2>غلط‌یاب و نرمال‌ساز هوشمند</h2>
+    <h2>سیستم جامع غلط‌یاب و نرمال‌ساز</h2>
+    
     <label for="languageSelect">حالت پردازش:</label>
     <select id="languageSelect">
-        <option value="auto" selected>تشخیص خودکار (مناسب متن‌های ترکیبی)</option>
+        <option value="auto" selected>تشخیص خودکار (پیشنهادی)</option>
         <option value="fa">فقط فارسی</option>
         <option value="en">فقط انگلیسی</option>
         <option value="ar">فقط عربی</option>
     </select>
-    <label for="inputText">متن خود را وارد کنید:</label>
-    <textarea id="inputText" placeholder="متن فارسی، انگلیسی، عربی را اینجا بنویسید..."></textarea>
-    <button id="processBtn" onclick="sendText()">پردازش و اصلاح متن</button>
     
-    <div class="output-header">
-        <h3>خروجی اصلاح‌شده:</h3>
-        <span id="langBadge" class="badge" style="display:none;"></span>
+    <label for="inputText">متن ورودی:</label>
+    <textarea id="inputText" placeholder="متن خود را اینجا بنویسید یا جای‌گذاری کنید..."></textarea>
+    
+    <div class="btn-group">
+        <button id="processBtn" class="btn-primary" onclick="processText()">پردازش و اصلاح</button>
+        <button class="btn-danger" onclick="clearAll()">پاک کردن</button>
     </div>
-    <div id="output"></div>
-    <button id="copyBtn" class="copy-btn" onclick="copyText()">کپی متن</button>
+    
+    <div class="header-flex">
+        <label style="margin:0;">خروجی اصلاح‌شده:</label>
+        <span id="langBadge" class="badge"></span>
+    </div>
+    
+    <div id="output" class="output-container"></div>
+    
+    <div class="btn-group" style="margin-top: 20px;">
+        <button id="copyBtn" class="btn-success" onclick="copyOutput()">کپی متن در کلیپ‌بورد</button>
+    </div>
+    
     <div id="status" class="status"></div>
 </div>
+
 <script>
-    async function sendText() {
+    async function processText() {
         const text = document.getElementById('inputText').value;
         const lang = document.getElementById('languageSelect').value;
         const outputDiv = document.getElementById('output');
@@ -95,7 +108,7 @@ HTML_PAGE = """
         outputDiv.textContent = '';
         langBadge.style.display = 'none';
         copyBtn.style.display = 'none';
-        statusDiv.textContent = 'در حال پردازش...';
+        statusDiv.textContent = 'در حال پردازش و اعمال قوانین زبانی...';
         btn.disabled = true;
 
         try {
@@ -113,9 +126,9 @@ HTML_PAGE = """
                     langBadge.style.display = 'inline-block';
                 }
                 statusDiv.textContent = 'پردازش با موفقیت انجام شد.';
-                copyBtn.style.display = 'block';
+                copyBtn.style.display = 'flex';
             } else {
-                outputDiv.textContent = 'خطا: ' + (data.error || 'ناشناخته');
+                outputDiv.textContent = 'خطا در پردازش: ' + (data.error || 'ناشناخته');
                 statusDiv.textContent = '';
             }
         } catch (err) {
@@ -126,13 +139,21 @@ HTML_PAGE = """
         }
     }
 
-    function copyText() {
+    function copyOutput() {
         const outputText = document.getElementById('output').textContent;
         navigator.clipboard.writeText(outputText).then(() => {
             const copyBtn = document.getElementById('copyBtn');
             copyBtn.textContent = 'کپی شد! ✔';
-            setTimeout(() => { copyBtn.textContent = 'کپی متن'; }, 2000);
+            setTimeout(() => { copyBtn.textContent = 'کپی متن در کلیپ‌بورد'; }, 2000);
         });
+    }
+
+    function clearAll() {
+        document.getElementById('inputText').value = '';
+        document.getElementById('output').textContent = '';
+        document.getElementById('status').textContent = '';
+        document.getElementById('langBadge').style.display = 'none';
+        document.getElementById('copyBtn').style.display = 'none';
     }
 </script>
 </body>
@@ -144,7 +165,7 @@ async def root():
     return HTML_PAGE
 
 @app.post("/api/process")
-async def process_text(input: TextInput):
+async def process_text_endpoint(input: TextInput):
     try:
         text = input.text
         if not text.strip():
@@ -164,13 +185,49 @@ async def process_text(input: TextInput):
         }
     except Exception as e:
         logger.error(f"Error processing text: {e}")
-        return {"success": False, "error": str(e)}
+        return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
-def remove_duplicate_chars(text: str) -> str:
-    """حذف حروف تکراری ۳ بار یا بیشتر (مثل سسسسلام -> سلام یا Helllo -> Hello)"""
-    return re.sub(r'([a-zA-Z\u0600-\u06FF])\1{2,}', r'\1', text)
+# --- توابع کمکی هوشمند ---
+
+def fix_repeated_chars(text: str, is_persian_arabic: bool) -> str:
+    """
+    حذف هوشمند حروف تکراری. 
+    اگر ۳ بار یا بیشتر تکرار شده باشد (مثل سسسلام) آن را به ۱ حرف کاهش می‌دهد.
+    """
+    if is_persian_arabic:
+        # محدوده یونیکد فارسی و عربی
+        return re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
+    else:
+        # حروف انگلیسی و ترکی
+        return re.sub(r'([a-zA-ZçğıöşüÇĞİÖŞÜ])\1{2,}', r'\1', text)
+
+def correct_with_pyspell(text: str, checker) -> str:
+    """غلط‌یابی کلمه به کلمه با حفظ علائم نگارشی و حروف بزرگ"""
+    words = text.split()
+    corrected_words = []
+    for word in words:
+        # جداسازی علائم نگارشی از ابتدا و انتهای کلمه
+        match = re.match(r'^([^\w\u0600-\u06FF]*)([\w\u0600-\u06FF]+)([^\w\u0600-\u06FF]*)$', word)
+        if match:
+            prefix, clean_word, suffix = match.groups()
+            # اگر کلمه در دیکشنری بود، دست نزن
+            if clean_word.lower() in checker:
+                corrected_words.append(word)
+            else:
+                correction = checker.correction(clean_word.lower())
+                if correction:
+                    # حفظ حرف بزرگ اول در انگلیسی
+                    if clean_word[0].isupper():
+                        correction = correction.capitalize()
+                    corrected_words.append(f"{prefix}{correction}{suffix}")
+                else:
+                    corrected_words.append(word)
+        else:
+            corrected_words.append(word)
+    return ' '.join(corrected_words)
 
 def process_mixed_text(text: str) -> str:
+    """پردازش خط به خط متن‌های ترکیبی با تشخیص دقیق زبان"""
     lines = text.split('\n')
     processed_lines = []
     
@@ -178,66 +235,53 @@ def process_mixed_text(text: str) -> str:
         if not line.strip():
             processed_lines.append(line)
             continue
-        
-        # 1. حذف حروف تکراری در کل خط
-        line = remove_duplicate_chars(line)
+            
+        # تشخیص زبان بر اساس اسکریپت (Script Analysis)
+        has_persian = bool(re.search(r'[پچژگ]', line))
+        has_arabic = bool(re.search(r'[\u0600-\u06FF]', line))
+        has_turkish = bool(re.search(r'[çğıöşüÇĞİÖŞÜ]', line))
+        has_english = bool(re.search(r'[a-zA-Z]', line))
 
-        # 2. تشخیص زبان خط
-        try:
-            lang = detect(line)
-        except:
-            lang = 'unknown'
-
-        # 3. اعمال قوانین بر اساس زبان
-        if lang == 'fa' or re.search(r'[پچژگ]', line):
-            # فارسی: اصلاح فاصله‌ها و نویسه‌ها با hazm
-            line = hazm_norm.normalize(line)
-        elif lang == 'ar':
-            # عربی: نرمال‌سازی و غلط‌یابی
-            line = araby.normalize_hamza(line)
-            line = araby.strip_tashkeel(line)
-            line = correct_with_pyspell(line, ar_checker)
-        elif lang == 'en' or (re.search(r'[a-zA-Z]', line) and not re.search(r'[çğıöşüÇĞİÖŞÜ]', line)):
-            # انگلیسی: غلط‌یابی
+        if has_persian or (has_arabic and not has_persian and not has_english):
+            # خط فارسی است (وجود حروف خاص فارسی، یا فقط حروف مشترک با عربی بدون حروف لاتین)
+            if has_persian:
+                line = fix_repeated_chars(line, is_persian_arabic=True)
+                line = hazm_norm.normalize(line) # اصلاح نیم‌فاصله
+            else:
+                # ممکن است عربی باشد
+                line = fix_repeated_chars(line, is_persian_arabic=True)
+                line = araby.normalize_hamza(line)
+                line = araby.strip_tashkeel(line)
+                line = correct_with_pyspell(line, ar_checker)
+                
+        elif has_english and not has_turkish:
+            # خط انگلیسی است
+            line = fix_repeated_chars(line, is_persian_arabic=False)
             line = correct_with_pyspell(line, en_checker)
-        elif lang == 'tr' or re.search(r'[çğıöşüÇĞİÖŞÜ]', line):
-            # ترکی: فعلاً فقط حروف تکراری حذف شده‌اند (برای جلوگیری از خطای حجم در ورسل)
-            pass
-                    
+            
+        elif has_turkish:
+            # خط ترکی است
+            line = fix_repeated_chars(line, is_persian_arabic=False)
+            # برای ترکی فعلاً فقط حروف تکراری را اصلاح می‌کنیم چون Zemberek روی Vercel سنگین است
+            
         processed_lines.append(line)
         
     return '\n'.join(processed_lines)
 
 def process_single_language(text: str, lang: str) -> str:
-    text = remove_duplicate_chars(text)
+    """پردازش متن وقتی کاربر زبان را دستی انتخاب می‌کند"""
     if lang == 'fa':
-        return hazm_norm.normalize(text)
+        text = fix_repeated_chars(text, is_persian_arabic=True)
+        text = hazm_norm.normalize(text)
     elif lang == 'ar':
+        text = fix_repeated_chars(text, is_persian_arabic=True)
         text = araby.normalize_hamza(text)
         text = araby.strip_tashkeel(text)
-        return correct_with_pyspell(text, ar_checker)
+        text = correct_with_pyspell(text, ar_checker)
     elif lang == 'en':
-        return correct_with_pyspell(text, en_checker)
+        text = fix_repeated_chars(text, is_persian_arabic=False)
+        text = correct_with_pyspell(text, en_checker)
     return text
 
-def correct_with_pyspell(text: str, checker) -> str:
-    words = text.split()
-    corrected_words = []
-    for word in words:
-        clean_word = re.sub(r'[^\w\s\u0600-\u06FF]', '', word)
-        if clean_word and clean_word.lower() in checker:
-            corrected_words.append(word)
-        elif clean_word:
-            correction = checker.correction(clean_word)
-            if correction:
-                # حفظ حروف بزرگ در انگلیسی
-                if clean_word[0].isupper() and correction:
-                    correction = correction.capitalize()
-                corrected_words.append(word.replace(clean_word, correction))
-            else:
-                corrected_words.append(word)
-        else:
-            corrected_words.append(word)
-    return ' '.join(corrected_words)
-
+# --- هندلر Vercel ---
 handler = Mangum(app)
