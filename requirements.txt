@@ -1,6 +1,8 @@
 fastapi
 uvicorn
 mangum
-shekar
+langdetect
 pyspellchecker
+pyarabic
+hazm-normalizer
 zemberek-python
