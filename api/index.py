@@ -5,46 +5,21 @@ from mangum import Mangum
 import re
 import logging
 
+from langdetect import detect, DetectorFactory
+DetectorFactory.seed = 0  # برای پایداری تشخیص زبان
+
+from spellchecker import SpellChecker
+from pyarabic import araby
+from hazm_normalizer import Normalizer as HazmNormalizer
+
 # --- تنظیمات لاگینگ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- ایمپورت کتابخانه‌ها با مدیریت خطای کامل (Anti-Crash) ---
-try:
-    from spellchecker import SpellChecker
-    PYSPELL_AVAILABLE = True
-except ImportError:
-    PYSPELL_AVAILABLE = False
-    logger.warning("pyspellchecker not available.")
-
-try:
-    from pyarabic import araby
-    PYARABIC_AVAILABLE = True
-except ImportError:
-    PYARABIC_AVAILABLE = False
-    logger.warning("PyArabic not available.")
-
-try:
-    from hazm_normalizer import Normalizer as HazmNormalizer
-    hazm_normalizer = HazmNormalizer()
-    HAZM_AVAILABLE = True
-except ImportError:
-    HAZM_AVAILABLE = False
-    logger.warning("hazm-normalizer not available.")
-
-try:
-    from zemberek import TurkishSpellChecker, TurkishMorphology
-    morphology = TurkishMorphology.create_with_defaults()
-    turkish_checker = TurkishSpellChecker(morphology)
-    ZEMBEREK_AVAILABLE = True
-except Exception as e:
-    ZEMBEREK_AVAILABLE = False
-    logger.warning(f"Zemberek not available: {e}")
-
-# --- تعریف دیکشنری‌های غلط‌یاب ---
-# ما فقط دیکشنری‌هایی را می‌سازیم که کتابخانه‌شان موجود است تا از کرش جلوگیری شود
-ar_checker = SpellChecker(language='ar') if PYSPELL_AVAILABLE else None
-en_checker = SpellChecker(language='en') if PYSPELL_AVAILABLE else None
+# --- مقداردهی اولیه ابزارها ---
+hazm_norm = HazmNormalizer()
+en_checker = SpellChecker(language='en')
+ar_checker = SpellChecker(language='ar')
 
 app = FastAPI()
 
@@ -52,7 +27,7 @@ class TextInput(BaseModel):
     text: str
     language: str = "auto"
 
-# --- صفحه HTML با طراحی ریسپانسیو ---
+# --- صفحه HTML با دکمه کپی ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -67,7 +42,7 @@ HTML_PAGE = """
     label { display: block; margin-bottom: 8px; font-weight: bold; }
     select, textarea, button { width: 100%; box-sizing: border-box; }
     select, textarea { padding: 12px; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; margin-bottom: 15px; font-family: inherit; }
-    textarea { height: 250px; resize: vertical; direction: auto; }
+    textarea { height: 250px; resize: vertical; direction: auto; line-height: 1.6; }
     button { padding: 14px; background: #1a73e8; color: white; border: none; border-radius: 8px; font-size: 16px; cursor: pointer; transition: background 0.3s; font-weight: bold; }
     button:hover { background: #1557b0; }
     button:disabled { background: #a0c3ff; cursor: not-allowed; }
@@ -75,6 +50,8 @@ HTML_PAGE = """
     .output-header h3 { margin: 0; }
     .badge { background: #e8f0fe; color: #1a73e8; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: bold; }
     #output { background: #fafafa; border: 1px solid #ddd; border-radius: 8px; padding: 15px; min-height: 150px; white-space: pre-wrap; direction: auto; font-size: 15px; line-height: 1.8; }
+    .copy-btn { margin-top: 10px; background: #34a853; display: none; }
+    .copy-btn:hover { background: #2b8a44; }
     .status { margin-top: 10px; font-size: 14px; color: #666; text-align: center; }
 </style>
 </head>
@@ -87,10 +64,9 @@ HTML_PAGE = """
         <option value="fa">فقط فارسی</option>
         <option value="en">فقط انگلیسی</option>
         <option value="ar">فقط عربی</option>
-        <option value="tr">فقط ترکی استانبولی</option>
     </select>
     <label for="inputText">متن خود را وارد کنید:</label>
-    <textarea id="inputText" placeholder="متن فارسی، انگلیسی، عربی یا ترکی را اینجا بنویسید..."></textarea>
+    <textarea id="inputText" placeholder="متن فارسی، انگلیسی، عربی را اینجا بنویسید..."></textarea>
     <button id="processBtn" onclick="sendText()">پردازش و اصلاح متن</button>
     
     <div class="output-header">
@@ -98,6 +74,7 @@ HTML_PAGE = """
         <span id="langBadge" class="badge" style="display:none;"></span>
     </div>
     <div id="output"></div>
+    <button id="copyBtn" class="copy-btn" onclick="copyText()">کپی متن</button>
     <div id="status" class="status"></div>
 </div>
 <script>
@@ -107,6 +84,7 @@ HTML_PAGE = """
         const outputDiv = document.getElementById('output');
         const statusDiv = document.getElementById('status');
         const btn = document.getElementById('processBtn');
+        const copyBtn = document.getElementById('copyBtn');
         const langBadge = document.getElementById('langBadge');
 
         if (!text.trim()) {
@@ -116,6 +94,7 @@ HTML_PAGE = """
 
         outputDiv.textContent = '';
         langBadge.style.display = 'none';
+        copyBtn.style.display = 'none';
         statusDiv.textContent = 'در حال پردازش...';
         btn.disabled = true;
 
@@ -134,6 +113,7 @@ HTML_PAGE = """
                     langBadge.style.display = 'inline-block';
                 }
                 statusDiv.textContent = 'پردازش با موفقیت انجام شد.';
+                copyBtn.style.display = 'block';
             } else {
                 outputDiv.textContent = 'خطا: ' + (data.error || 'ناشناخته');
                 statusDiv.textContent = '';
@@ -144,6 +124,15 @@ HTML_PAGE = """
         } finally {
             btn.disabled = false;
         }
+    }
+
+    function copyText() {
+        const outputText = document.getElementById('output').textContent;
+        navigator.clipboard.writeText(outputText).then(() => {
+            const copyBtn = document.getElementById('copyBtn');
+            copyBtn.textContent = 'کپی شد! ✔';
+            setTimeout(() => { copyBtn.textContent = 'کپی متن'; }, 2000);
+        });
     }
 </script>
 </body>
@@ -168,9 +157,6 @@ async def process_text(input: TextInput):
             corrected_text = process_single_language(text, input.language)
             detected = input.language.upper()
 
-        # تمیزکاری نهایی: حذف فاصله‌های اضافی اما حفظ خطوط جدید (Enter)
-        corrected_text = re.sub(r'[ \t]+', ' ', corrected_text)
-
         return {
             "success": True,
             "text": corrected_text,
@@ -180,7 +166,10 @@ async def process_text(input: TextInput):
         logger.error(f"Error processing text: {e}")
         return {"success": False, "error": str(e)}
 
-# --- منطق پردازش ترکیبی (خط به خط) ---
+def remove_duplicate_chars(text: str) -> str:
+    """حذف حروف تکراری ۳ بار یا بیشتر (مثل سسسسلام -> سلام یا Helllo -> Hello)"""
+    return re.sub(r'([a-zA-Z\u0600-\u06FF])\1{2,}', r'\1', text)
+
 def process_mixed_text(text: str) -> str:
     lines = text.split('\n')
     processed_lines = []
@@ -190,57 +179,48 @@ def process_mixed_text(text: str) -> str:
             processed_lines.append(line)
             continue
         
-        # نرمال‌سازی اولیه (اعمال روی کل خط)
-        if HAZM_AVAILABLE:
-            line = hazm_normalizer.normalize(line)
-        if PYARABIC_AVAILABLE:
+        # 1. حذف حروف تکراری در کل خط
+        line = remove_duplicate_chars(line)
+
+        # 2. تشخیص زبان خط
+        try:
+            lang = detect(line)
+        except:
+            lang = 'unknown'
+
+        # 3. اعمال قوانین بر اساس زبان
+        if lang == 'fa' or re.search(r'[پچژگ]', line):
+            # فارسی: اصلاح فاصله‌ها و نویسه‌ها با hazm
+            line = hazm_norm.normalize(line)
+        elif lang == 'ar':
+            # عربی: نرمال‌سازی و غلط‌یابی
             line = araby.normalize_hamza(line)
             line = araby.strip_tashkeel(line)
-
-        # تشخیص زبان خط بر اساس اسکریپت (Script)
-        if re.search(r'[\u0600-\u06FF]', line):
-            # دارای کاراکترهای فارسی/عربی
-            if re.search(r'[پچژگ]', line):
-                # خط فارسی است (نرمال‌سازی hazm کافی است)
-                pass 
-            else:
-                # خط عربی است
-                if PYSPELL_AVAILABLE:
-                    line = correct_with_pyspell(line, ar_checker)
-        elif re.search(r'[a-zA-Z]', line):
-            # دارای کاراکترهای لاتین
-            if re.search(r'[çğıöşüÇĞİÖŞÜ]', line):
-                # خط ترکی است
-                if ZEMBEREK_AVAILABLE:
-                    line = correct_with_zemberek(line)
-            else:
-                # خط انگلیسی است
-                if PYSPELL_AVAILABLE:
-                    line = correct_with_pyspell(line, en_checker)
+            line = correct_with_pyspell(line, ar_checker)
+        elif lang == 'en' or (re.search(r'[a-zA-Z]', line) and not re.search(r'[çğıöşüÇĞİÖŞÜ]', line)):
+            # انگلیسی: غلط‌یابی
+            line = correct_with_pyspell(line, en_checker)
+        elif lang == 'tr' or re.search(r'[çğıöşüÇĞİÖŞÜ]', line):
+            # ترکی: فعلاً فقط حروف تکراری حذف شده‌اند (برای جلوگیری از خطای حجم در ورسل)
+            pass
                     
         processed_lines.append(line)
         
     return '\n'.join(processed_lines)
 
-# --- منطق پردازش تک‌زبانه (وقتی کاربر زبان را دستی انتخاب می‌کند) ---
 def process_single_language(text: str, lang: str) -> str:
-    if lang == 'fa' and HAZM_AVAILABLE:
-        return hazm_normalizer.normalize(text)
+    text = remove_duplicate_chars(text)
+    if lang == 'fa':
+        return hazm_norm.normalize(text)
     elif lang == 'ar':
-        if PYARABIC_AVAILABLE:
-            text = araby.normalize_hamza(text)
-            text = araby.strip_tashkeel(text)
-        if PYSPELL_AVAILABLE:
-            return correct_with_pyspell(text, ar_checker)
-    elif lang == 'tr' and ZEMBEREK_AVAILABLE:
-        return correct_with_zemberek(text)
-    elif lang == 'en' and PYSPELL_AVAILABLE:
+        text = araby.normalize_hamza(text)
+        text = araby.strip_tashkeel(text)
+        return correct_with_pyspell(text, ar_checker)
+    elif lang == 'en':
         return correct_with_pyspell(text, en_checker)
     return text
 
 def correct_with_pyspell(text: str, checker) -> str:
-    if not checker:
-        return text
     words = text.split()
     corrected_words = []
     for word in words:
@@ -250,7 +230,8 @@ def correct_with_pyspell(text: str, checker) -> str:
         elif clean_word:
             correction = checker.correction(clean_word)
             if correction:
-                if clean_word[0].isupper():
+                # حفظ حروف بزرگ در انگلیسی
+                if clean_word[0].isupper() and correction:
                     correction = correction.capitalize()
                 corrected_words.append(word.replace(clean_word, correction))
             else:
@@ -259,29 +240,4 @@ def correct_with_pyspell(text: str, checker) -> str:
             corrected_words.append(word)
     return ' '.join(corrected_words)
 
-def correct_with_zemberek(text: str) -> str:
-    if not ZEMBEREK_AVAILABLE:
-        return text
-    try:
-        words = text.split()
-        corrected_words = []
-        for word in words:
-            clean_word = re.sub(r'[^\w\sçğıöşüÇĞİÖŞÜ]', '', word)
-            if not clean_word:
-                corrected_words.append(word)
-                continue
-            if turkish_checker.check(clean_word):
-                corrected_words.append(word)
-            else:
-                suggestions = turkish_checker.suggestions(clean_word)
-                if suggestions:
-                    corrected_words.append(word.replace(clean_word, suggestions[0]))
-                else:
-                    corrected_words.append(word)
-        return ' '.join(corrected_words)
-    except Exception as e:
-        logger.error(f"Zemberek error: {e}")
-        return text
-
-# --- هندلر Vercel ---
 handler = Mangum(app)
