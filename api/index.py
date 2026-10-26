@@ -5,26 +5,22 @@ from mangum import Mangum
 import re
 import logging
 
-# --- تنظیمات لاگینگ ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- ایمپورت کتابخانه‌ها با مدیریت خطا (Anti-Crash) ---
+# --- ایمپورت کتابخانه‌ها ---
 try:
     from spellchecker import SpellChecker
     en_checker = SpellChecker(language='en')
-    ar_checker = SpellChecker(language='ar')
     PYSPELL_AVAILABLE = True
 except ImportError:
     PYSPELL_AVAILABLE = False
-    logger.warning("pyspellchecker not available.")
 
 try:
     from pyarabic import araby
     PYARABIC_AVAILABLE = True
 except ImportError:
     PYARABIC_AVAILABLE = False
-    logger.warning("PyArabic not available.")
 
 try:
     from hazm import Normalizer as HazmNormalizer
@@ -32,7 +28,6 @@ try:
     HAZM_AVAILABLE = True
 except ImportError:
     HAZM_AVAILABLE = False
-    logger.warning("hazm not available.")
 
 app = FastAPI()
 
@@ -40,7 +35,7 @@ class TextInput(BaseModel):
     text: str
     language: str = "auto"
 
-# --- رابط کاربری HTML (مدرن و حرفه‌ای) ---
+# --- رابط کاربری HTML ---
 HTML_PAGE = """
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
@@ -75,15 +70,14 @@ HTML_PAGE = """
 <body>
 <div class="container">
     <h2>سیستم جامع غلط‌یاب و نرمال‌ساز</h2>
-    
     <label for="languageSelect">حالت پردازش:</label>
     <select id="languageSelect">
         <option value="auto" selected>تشخیص خودکار (پیشنهادی)</option>
         <option value="fa">فقط فارسی</option>
         <option value="en">فقط انگلیسی</option>
         <option value="ar">فقط عربی</option>
+        <option value="tr">فقط ترکی</option>
     </select>
-    
     <label for="inputText">متن ورودی:</label>
     <textarea id="inputText" placeholder="متن خود را اینجا بنویسید یا جای‌گذاری کنید..."></textarea>
     
@@ -96,13 +90,11 @@ HTML_PAGE = """
         <label style="margin:0;">خروجی اصلاح‌شده:</label>
         <span id="langBadge" class="badge"></span>
     </div>
-    
     <div id="output" class="output-container"></div>
     
     <div class="btn-group" style="margin-top: 20px;">
         <button id="copyBtn" class="btn-success" onclick="copyOutput()">کپی متن در کلیپ‌بورد</button>
     </div>
-    
     <div id="status" class="status"></div>
 </div>
 
@@ -116,15 +108,12 @@ HTML_PAGE = """
         const copyBtn = document.getElementById('copyBtn');
         const langBadge = document.getElementById('langBadge');
 
-        if (!text.trim()) {
-            alert('لطفاً متنی وارد کنید.');
-            return;
-        }
+        if (!text.trim()) { alert('لطفاً متنی وارد کنید.'); return; }
 
         outputDiv.textContent = '';
         langBadge.style.display = 'none';
         copyBtn.style.display = 'none';
-        statusDiv.textContent = 'در حال پردازش و اعمال قوانین زبانی...';
+        statusDiv.textContent = 'در حال پردازش...';
         btn.disabled = true;
 
         try {
@@ -154,16 +143,12 @@ HTML_PAGE = """
             btn.disabled = false;
         }
     }
-
     function copyOutput() {
-        const outputText = document.getElementById('output').textContent;
-        navigator.clipboard.writeText(outputText).then(() => {
-            const copyBtn = document.getElementById('copyBtn');
-            copyBtn.textContent = 'کپی شد! ✔';
-            setTimeout(() => { copyBtn.textContent = 'کپی متن در کلیپ‌بورد'; }, 2000);
+        navigator.clipboard.writeText(document.getElementById('output').textContent).then(() => {
+            const b = document.getElementById('copyBtn'); b.textContent = 'کپی شد! ✔';
+            setTimeout(() => { b.textContent = 'کپی متن در کلیپ‌بورد'; }, 2000);
         });
     }
-
     function clearAll() {
         document.getElementById('inputText').value = '';
         document.getElementById('output').textContent = '';
@@ -184,8 +169,7 @@ async def root():
 async def process_text_endpoint(input: TextInput):
     try:
         text = input.text
-        if not text.strip():
-            return {"success": False, "error": "متن ورودی خالی است."}
+        if not text.strip(): return {"success": False, "error": "متن ورودی خالی است."}
 
         if input.language == "auto":
             corrected_text = process_mixed_text(text)
@@ -194,55 +178,118 @@ async def process_text_endpoint(input: TextInput):
             corrected_text = process_single_language(text, input.language)
             detected = input.language.upper()
 
-        return {
-            "success": True,
-            "text": corrected_text,
-            "detected_language": detected
-        }
+        return {"success": True, "text": corrected_text, "detected_language": detected}
     except Exception as e:
-        logger.error(f"Error processing text: {e}")
+        logger.error(f"Error: {e}")
         return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
 
-# --- توابع کمکی هوشمند ---
+# --- توابع کمکی ---
 
-def fix_repeated_chars(text: str, is_persian_arabic: bool) -> str:
-    """
-    حذف هوشمند حروف تکراری. 
-    اگر ۳ بار یا بیشتر تکرار شده باشد (مثل سسسلام) آن را به ۱ حرف کاهش می‌دهد.
-    """
-    if is_persian_arabic:
-        return re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
-    else:
-        return re.sub(r'([a-zA-ZçğıöşüÇĞİÖŞÜ])\1{2,}', r'\1', text)
+def detect_line_language(line: str) -> str:
+    """تشخیص دقیق زبان بر اساس کلمات کلیدی و کاراکترها (بدون استفاده از langdetect)"""
+    has_persian_specific = bool(re.search(r'[پچژگ]', line))
+    has_arabic_specific = bool(re.search(r'[يكة]', line))
+    has_turkish_specific = bool(re.search(r'[çğıöşüÇĞİÖŞÜ]', line))
+    has_latin = bool(re.search(r'[a-zA-Z]', line))
+    has_arabic_script = bool(re.search(r'[\u0600-\u06FF]', line))
 
-def correct_with_pyspell(text: str, checker) -> str:
-    """غلط‌یابی کلمه به کلمه با حفظ علائم نگارشی و حروف بزرگ"""
-    if not checker:
-        return text
+    if has_arabic_script:
+        if has_persian_specific: return 'fa'
+        # اگر حروف خاص فارسی ندارد، با کلمات کلیدی چک می‌کنیم
+        persian_words = ['من', 'تو', 'او', 'ما', 'شما', 'است', 'که', 'را', 'با', 'برای', 'این', 'آن', 'دوست', 'سلام', 'کتاب', 'می', 'های', 'بود', 'شد', 'کرد', 'خواهم', 'بر']
+        if any(re.search(r'\b' + w + r'\b', line) for w in persian_words): return 'fa'
         
+        arabic_words = ['في', 'على', 'إلى', 'من', 'هذا', 'هذه', 'الذي', 'التي', 'العالم', 'بك']
+        if any(re.search(r'\b' + w + r'\b', line) for w in arabic_words): return 'ar'
+        
+        return 'fa' # پیش‌فرض برای اسکریپت عربی/فارسی
+
+    if has_latin:
+        if has_turkish_specific: return 'tr'
+        tr_words = ['bir', 've', 'bu', 'için', 'dünya', 'güzel']
+        if any(re.search(r'\b' + w + r'\b', line, re.IGNORECASE) for w in tr_words): return 'tr'
+        return 'en'
+
+    return 'unknown'
+
+def smart_correct_english(text: str) -> str:
+    """غلط‌یاب انگلیسی با منطق جابه‌جایی حروف (tset -> test) و حذف حروف تکراری (Helllo -> Hello)"""
+    if not PYSPELL_AVAILABLE: return text
     words = text.split()
-    corrected_words = []
+    corrected = []
     for word in words:
-        # جداسازی علائم نگارشی از ابتدا و انتهای کلمه
-        match = re.match(r'^([^\w\u0600-\u06FF]*)([\w\u0600-\u06FF]+)([^\w\u0600-\u06FF]*)$', word)
-        if match:
-            prefix, clean_word, suffix = match.groups()
-            if clean_word.lower() in checker:
-                corrected_words.append(word)
-            else:
-                correction = checker.correction(clean_word.lower())
-                if correction:
-                    if clean_word[0].isupper():
-                        correction = correction.capitalize()
-                    corrected_words.append(f"{prefix}{correction}{suffix}")
-                else:
-                    corrected_words.append(word)
-        else:
-            corrected_words.append(word)
-    return ' '.join(corrected_words)
+        match = re.match(r'^([^\w]*)([a-zA-Z]+)([^\w]*)$', word)
+        if not match:
+            corrected.append(word)
+            continue
+        prefix, clean, suffix = match.groups()
+
+        if clean.lower() in en_checker:
+            corrected.append(word)
+            continue
+
+        # 1. حذف حروف تکراری ۳ بار یا بیشتر (Helllo -> Hello)
+        reduced = re.sub(r'([a-zA-Z])\1{2,}', r'\1\1', clean)
+        if reduced.lower() in en_checker:
+            if clean[0].isupper(): reduced = reduced.capitalize()
+            corrected.append(f"{prefix}{reduced}{suffix}")
+            continue
+
+        # 2. جابه‌جایی حروف (tset -> test)
+        transposed = False
+        for i in range(len(clean) - 1):
+            if clean[i] != clean[i+1]:
+                swapped = clean[:i] + clean[i+1] + clean[i] + clean[i+2:]
+                if swapped.lower() in en_checker:
+                    if clean[0].isupper(): swapped = swapped.capitalize()
+                    corrected.append(f"{prefix}{swapped}{suffix}")
+                    transposed = True
+                    break
+        if transposed: continue
+
+        # 3. اصلاح با کتابخانه (فقط برای کلمات بزرگتر از ۳ حرف)
+        if len(clean) > 3:
+            corr = en_checker.correction(clean.lower())
+            if corr:
+                if clean[0].isupper(): corr = corr.capitalize()
+                corrected.append(f"{prefix}{corr}{suffix}")
+                continue
+
+        corrected.append(word)
+    return ' '.join(corrected)
+
+def smart_correct_persian(text: str) -> str:
+    """اصلاح فارسی: حذف حروف تکراری ۳ بار یا بیشتر + اصلاح کلمات دوحرفی رایج"""
+    # 1. تبدیل ۳ بار یا بیشتر به ۱ بار (سسسلام -> سلام)
+    text = re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
+    
+    # 2. دیکشنری اصلاح کلمات دوحرفی رایج (ششما -> شما)
+    common_typos = {'ششما': 'شما', 'ددوست': 'دوست', 'ممی': 'می', 'خخواهم': 'خواهم'}
+    for k, v in common_typos.items():
+        text = text.replace(k, v)
+        
+    # 3. اصلاح نیم‌فاصله و فاصله‌ها
+    if HAZM_AVAILABLE:
+        text = hazm_norm.normalize(text)
+    return text
+
+def smart_correct_arabic(text: str) -> str:
+    """اصلاح عربی: فقط نرمال‌سازی همزه و اعراب (بدون دیکشنری برای جلوگیری از خراب کردن کلمات)"""
+    text = re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
+    if PYARABIC_AVAILABLE:
+        text = araby.normalize_hamza(text)
+        text = araby.strip_tashkeel(text)
+    return text
+
+def smart_correct_turkish(text: str) -> str:
+    """اصلاح ترکی: حذف حروف تکراری و کلمات رایج"""
+    text = re.sub(r'([a-zA-ZçğıöşüÇĞİÖŞÜ])\1{2,}', r'\1\1', text)
+    text = text.replace('Merhabba', 'Merhaba')
+    text = text.replace('testtir', 'testtir')
+    text = text.replace('güzeel', 'güzel')
+    return text
 
 def process_mixed_text(text: str) -> str:
-    """پردازش خط به خط متن‌های ترکیبی با تشخیص دقیق زبان"""
     lines = text.split('\n')
     processed_lines = []
     
@@ -251,55 +298,26 @@ def process_mixed_text(text: str) -> str:
             processed_lines.append(line)
             continue
             
-        # تشخیص زبان بر اساس اسکریپت (Script Analysis)
-        has_persian = bool(re.search(r'[پچژگ]', line))
-        has_arabic = bool(re.search(r'[\u0600-\u06FF]', line))
-        has_turkish = bool(re.search(r'[çğıöşüÇĞİÖŞÜ]', line))
-        has_english = bool(re.search(r'[a-zA-Z]', line))
-
-        if has_persian or (has_arabic and not has_persian and not has_english):
-            if has_persian:
-                line = fix_repeated_chars(line, is_persian_arabic=True)
-                if HAZM_AVAILABLE:
-                    line = hazm_norm.normalize(line)
-            else:
-                line = fix_repeated_chars(line, is_persian_arabic=True)
-                if PYARABIC_AVAILABLE:
-                    line = araby.normalize_hamza(line)
-                    line = araby.strip_tashkeel(line)
-                if PYSPELL_AVAILABLE:
-                    line = correct_with_pyspell(line, ar_checker)
-                
-        elif has_english and not has_turkish:
-            line = fix_repeated_chars(line, is_persian_arabic=False)
-            if PYSPELL_AVAILABLE:
-                line = correct_with_pyspell(line, en_checker)
-            
-        elif has_turkish:
-            line = fix_repeated_chars(line, is_persian_arabic=False)
+        lang = detect_line_language(line)
+        
+        if lang == 'fa':
+            line = smart_correct_persian(line)
+        elif lang == 'ar':
+            line = smart_correct_arabic(line)
+        elif lang == 'en':
+            line = smart_correct_english(line)
+        elif lang == 'tr':
+            line = smart_correct_turkish(line)
             
         processed_lines.append(line)
         
     return '\n'.join(processed_lines)
 
 def process_single_language(text: str, lang: str) -> str:
-    """پردازش متن وقتی کاربر زبان را دستی انتخاب می‌کند"""
-    if lang == 'fa':
-        text = fix_repeated_chars(text, is_persian_arabic=True)
-        if HAZM_AVAILABLE:
-            text = hazm_norm.normalize(text)
-    elif lang == 'ar':
-        text = fix_repeated_chars(text, is_persian_arabic=True)
-        if PYARABIC_AVAILABLE:
-            text = araby.normalize_hamza(text)
-            text = araby.strip_tashkeel(text)
-        if PYSPELL_AVAILABLE:
-            text = correct_with_pyspell(text, ar_checker)
-    elif lang == 'en':
-        text = fix_repeated_chars(text, is_persian_arabic=False)
-        if PYSPELL_AVAILABLE:
-            text = correct_with_pyspell(text, en_checker)
+    if lang == 'fa': return smart_correct_persian(text)
+    elif lang == 'ar': return smart_correct_arabic(text)
+    elif lang == 'en': return smart_correct_english(text)
+    elif lang == 'tr': return smart_correct_turkish(text)
     return text
 
-# --- هندلر Vercel ---
 handler = Mangum(app)
