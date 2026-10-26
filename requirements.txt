@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 mangum
-symspellpy
+pyspellchecker
+pyarabic
 hazm
-akana
