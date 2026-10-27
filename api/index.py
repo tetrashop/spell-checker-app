@@ -193,7 +193,7 @@ def detect_line_language(line: str) -> str:
         else: return 'ar'
     if re.search(r'[a-zA-Z]', line):
         if re.search(r'[çğıöşüÇĞİÖŞÜ]', line): return 'tr'
-        tr_words = ['bir', 've', 'bu', 'için', 'dünya', 'güzel', 'merhaba', 'test', 'evet', 'hayır', 'değil', 'ama', 'ben', 'çok', 'gün']
+        tr_words = ['bir', 've', 'bu', 'için', 'dünya', 'güzel', 'merhaba', 'test', 'evet', 'hayır', 'değil', 'ama', 'ben', 'çok', 'gün', 'arkadaşlar']
         en_words = ['the', 'is', 'this', 'that', 'world', 'hello', 'test', 'of', 'and', 'in', 'to', 'it', 'you', 'for', 'with', 'have', 'a', 'i', 'he']
         t_matches = sum(1 for w in tr_words if w in line.lower().split())
         e_matches = sum(1 for w in en_words if w in line.lower().split())
@@ -252,7 +252,7 @@ def smart_correct_english(text: str) -> str:
 
 def smart_correct_arabic(text: str) -> str:
     if PYARABIC_AVAILABLE:
-        text = araby.normalize_hamza(text)
+        # فقط اعراب را حذف می‌کنیم. تابع normalize_hamza را حذف کردیم تا کلمات سالم خراب نشوند
         text = araby.strip_tashkeel(text)
         
     text = re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
@@ -264,7 +264,6 @@ def smart_correct_arabic(text: str) -> str:
             match = re.match(r'^([^\w\u0600-\u06FF]*)([\w\u0600-\u06FF]+)([^\w\u0600-\u06FF]*)$', word)
             if match:
                 prefix, clean, suffix = match.groups()
-                # باگ‌گیری: کلمات کوتاه‌تر از ۴ حرف را دست نزن (مثل من، أن، إلى، على)
                 if clean in ar_checker or len(clean) <= 3:
                     corrected.append(word)
                 else:
@@ -288,7 +287,8 @@ def smart_correct_persian(text: str) -> str:
         'برر': 'بر', 'راا': 'را', 'ازز': 'از', 'درر': 'در', 'چچ': 'چ',
         'ههر': 'هر', 'ییک': 'یک', 'دده': 'ده', 'ددر': 'در',
         'میخواهم': 'می‌خواهم', 'کتابخوان': 'کتاب‌خوان', 'کتابها': 'کتاب‌ها',
-        'میشود': 'می‌شود', 'نمیشود': 'نمی‌شود', 'نمیتوانم': 'نمی‌توانم'
+        'میشود': 'می‌شود', 'نمیشود': 'نمی‌شود', 'نمیتوانم': 'نمی‌توانم',
+        'پروژهی': 'پروژه‌ی'
     }
     
     for k, v in common_typos.items():
@@ -307,10 +307,10 @@ def smart_correct_turkish(text: str) -> str:
         'birr': 'bir', 'vee': 've', 'buu': 'bu', 'içinn': 'için',
         'değill': 'değil', 'evett': 'evet', 'hayırr': 'hayır',
         'guzel': 'güzel', 'dun': 'dün', 'uyuyamadim': 'uyuyamadım', 
-        'bugun': 'bugün', 'yaptim': 'yaptım', 'gelicem': 'geleceğim'
+        'bugun': 'bugün', 'yaptim': 'yaptım', 'gelicem': 'geleceğim',
+        'arkadaslar': 'arkadaşlar', 'tesekkurler': 'teşekkürler'
     }
     
-    # استفاده از regex برای جایگزینی دقیق کلمات
     for k, v in common_typos.items():
         text = re.sub(r'\b' + k + r'\b', v, text, flags=re.IGNORECASE)
         
