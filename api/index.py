@@ -43,7 +43,7 @@ HTML_PAGE = """
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>غلط‌یاب جامع چندزبانه</title>
+<title>غلط‌یاب جامع و پیشرفته</title>
 <style>
     :root { --primary: #1a73e8; --primary-hover: #1557b0; --bg: #f0f2f5; --text: #333; }
     body { font-family: 'Segoe UI', Tahoma, sans-serif; max-width: 900px; margin: 20px auto; padding: 15px; background: var(--bg); color: var(--text); }
@@ -67,7 +67,7 @@ HTML_PAGE = """
 </head>
 <body>
 <div class="container">
-    <h2>غلط‌یاب جامع چندزبانه</h2>
+    <h2>غلط‌یاب جامع و پیشرفته</h2>
     <label for="languageSelect">حالت پردازش:</label>
     <select id="languageSelect">
         <option value="auto" selected>تشخیص خودکار (پیشنهادی)</option>
@@ -185,16 +185,16 @@ async def process_text_endpoint(input: TextInput):
 def detect_line_language(line: str) -> str:
     if re.search(r'[\u0600-\u06FF]', line):
         if re.search(r'[پچژگ]', line): return 'fa'
-        persian_words = ['من', 'تو', 'او', 'ما', 'شما', 'است', 'که', 'را', 'با', 'برای', 'این', 'آن', 'دوست', 'سلام', 'کتاب', 'می', 'های', 'بود', 'شد', 'کرد', 'خواهم', 'بر', 'در', 'از']
-        arabic_words = ['في', 'على', 'إلى', 'من', 'هذا', 'هذه', 'الذي', 'التي', 'العالم', 'بك', 'عن', 'مع', 'لا', 'ما', 'هو', 'هي', 'انا', 'انت']
+        persian_words = ['من', 'تو', 'او', 'ما', 'شما', 'است', 'که', 'را', 'با', 'برای', 'این', 'آن', 'دوست', 'سلام', 'کتاب', 'می', 'های', 'بود', 'شد', 'کرد', 'خواهم', 'بر', 'در', 'از', 'اما']
+        arabic_words = ['في', 'على', 'إلى', 'من', 'هذا', 'هذه', 'الذي', 'التي', 'العالم', 'بك', 'عن', 'مع', 'لا', 'ما', 'هو', 'هي', 'انا', 'انت', 'يجب', 'أن', 'غدا']
         p_matches = sum(1 for w in persian_words if w in line.split())
         a_matches = sum(1 for w in arabic_words if w in line.split())
         if p_matches >= a_matches: return 'fa'
         else: return 'ar'
     if re.search(r'[a-zA-Z]', line):
         if re.search(r'[çğıöşüÇĞİÖŞÜ]', line): return 'tr'
-        tr_words = ['bir', 've', 'bu', 'için', 'dünya', 'güzel', 'merhaba', 'test', 'evet', 'hayır', 'değil']
-        en_words = ['the', 'is', 'this', 'that', 'world', 'hello', 'test', 'of', 'and', 'in', 'to', 'it', 'you', 'for', 'with']
+        tr_words = ['bir', 've', 'bu', 'için', 'dünya', 'güzel', 'merhaba', 'test', 'evet', 'hayır', 'değil', 'ama', 'ben', 'çok', 'gün']
+        en_words = ['the', 'is', 'this', 'that', 'world', 'hello', 'test', 'of', 'and', 'in', 'to', 'it', 'you', 'for', 'with', 'have', 'a', 'i', 'he']
         t_matches = sum(1 for w in tr_words if w in line.lower().split())
         e_matches = sum(1 for w in en_words if w in line.lower().split())
         if t_matches > e_matches: return 'tr'
@@ -218,14 +218,12 @@ def smart_correct_english(text: str) -> str:
             corrected.append(word)
             continue
 
-        # حذف حروف تکراری ۳ بار یا بیشتر (Helllo -> Hello)
         reduced = re.sub(r'([a-zA-Z])\1{2,}', r'\1\1', clean)
         if reduced.lower() in en_checker:
             if clean[0].isupper(): reduced = reduced.capitalize()
             corrected.append(f"{prefix}{reduced}{suffix}")
             continue
 
-        # جابه‌جایی هوشمند حروف با بررسی بسامد (tset -> test)
         best_word = None
         max_freq = 0
         for i in range(len(clean_lower) - 1):
@@ -266,7 +264,8 @@ def smart_correct_arabic(text: str) -> str:
             match = re.match(r'^([^\w\u0600-\u06FF]*)([\w\u0600-\u06FF]+)([^\w\u0600-\u06FF]*)$', word)
             if match:
                 prefix, clean, suffix = match.groups()
-                if clean in ar_checker:
+                # باگ‌گیری: کلمات کوتاه‌تر از ۴ حرف را دست نزن (مثل من، أن، إلى، على)
+                if clean in ar_checker or len(clean) <= 3:
                     corrected.append(word)
                 else:
                     corr = ar_checker.correction(clean)
@@ -289,7 +288,7 @@ def smart_correct_persian(text: str) -> str:
         'برر': 'بر', 'راا': 'را', 'ازز': 'از', 'درر': 'در', 'چچ': 'چ',
         'ههر': 'هر', 'ییک': 'یک', 'دده': 'ده', 'ددر': 'در',
         'میخواهم': 'می‌خواهم', 'کتابخوان': 'کتاب‌خوان', 'کتابها': 'کتاب‌ها',
-        'میشود': 'می‌شود', 'نمیشود': 'نمی‌شود'
+        'میشود': 'می‌شود', 'نمیشود': 'نمی‌شود', 'نمیتوانم': 'نمی‌توانم'
     }
     
     for k, v in common_typos.items():
@@ -306,11 +305,14 @@ def smart_correct_turkish(text: str) -> str:
     common_typos = {
         'Merhabba': 'Merhaba', 'güzeel': 'güzel', 'dünyaa': 'dünya',
         'birr': 'bir', 'vee': 've', 'buu': 'bu', 'içinn': 'için',
-        'değill': 'değil', 'evett': 'evet', 'hayırr': 'hayır'
+        'değill': 'değil', 'evett': 'evet', 'hayırr': 'hayır',
+        'guzel': 'güzel', 'dun': 'dün', 'uyuyamadim': 'uyuyamadım', 
+        'bugun': 'bugün', 'yaptim': 'yaptım', 'gelicem': 'geleceğim'
     }
     
+    # استفاده از regex برای جایگزینی دقیق کلمات
     for k, v in common_typos.items():
-        text = text.replace(k, v)
+        text = re.sub(r'\b' + k + r'\b', v, text, flags=re.IGNORECASE)
         
     return text
 
