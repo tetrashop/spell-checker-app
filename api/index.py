@@ -8,7 +8,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# --- ایمپورت کتابخانه‌ها با مدیریت خطا ---
+# --- ایمپورت کتابخانه‌ها ---
 try:
     from spellchecker import SpellChecker
     en_checker = SpellChecker(language='en')
@@ -202,7 +202,9 @@ def detect_line_language(line: str) -> str:
     return 'en'
 
 # --- توابع اصلاح‌گر ---
-def smart_correct_english(text: str) -> str:
+
+def fix_english_words_in_text(text: str) -> str:
+    """این تابع کلمات انگلیسی را حتی در جملات فارسی/عربی پیدا کرده و اصلاح می‌کند"""
     if not PYSPELL_AVAILABLE: return text
     words = text.split()
     corrected = []
@@ -218,12 +220,14 @@ def smart_correct_english(text: str) -> str:
             corrected.append(word)
             continue
 
+        # حذف حروف تکراری ۳ بار یا بیشتر (Helllo -> Hello)
         reduced = re.sub(r'([a-zA-Z])\1{2,}', r'\1\1', clean)
         if reduced.lower() in en_checker:
             if clean[0].isupper(): reduced = reduced.capitalize()
             corrected.append(f"{prefix}{reduced}{suffix}")
             continue
 
+        # جابه‌جایی هوشمند حروف با بررسی بسامد (tset -> test)
         best_word = None
         max_freq = 0
         for i in range(len(clean_lower) - 1):
@@ -240,6 +244,7 @@ def smart_correct_english(text: str) -> str:
             corrected.append(f"{prefix}{best_word}{suffix}")
             continue
 
+        # اصلاح با کتابخانه (Erorr -> Error)
         if len(clean_lower) > 3:
             corr = en_checker.correction(clean_lower)
             if corr:
@@ -252,7 +257,6 @@ def smart_correct_english(text: str) -> str:
 
 def smart_correct_arabic(text: str) -> str:
     if PYARABIC_AVAILABLE:
-        # فقط اعراب را حذف می‌کنیم. تابع normalize_hamza را حذف کردیم تا کلمات سالم خراب نشوند
         text = araby.strip_tashkeel(text)
         
     text = re.sub(r'([\u0600-\u06FF])\1{2,}', r'\1', text)
@@ -323,19 +327,33 @@ def process_mixed_text(text: str) -> str:
         if not line.strip():
             processed_lines.append(line)
             continue
+            
         lang = detect_line_language(line)
-        if lang == 'fa': line = smart_correct_persian(line)
-        elif lang == 'ar': line = smart_correct_arabic(line)
-        elif lang == 'en': line = smart_correct_english(line)
-        elif lang == 'tr': line = smart_correct_turkish(line)
+        
+        # اعمال قوانین زبان اصلی
+        if lang == 'fa':
+            line = smart_correct_persian(line)
+        elif lang == 'ar':
+            line = smart_correct_arabic(line)
+        elif lang == 'tr':
+            line = smart_correct_turkish(line)
+            
+        # حتی اگر خط فارسی یا عربی باشد، کلمات انگلیسی داخل آن را اصلاح کن (مثل Erorr)
+        if lang in ['fa', 'ar', 'en']:
+            line = fix_english_words_in_text(line)
+            
         processed_lines.append(line)
     return '\n'.join(processed_lines)
 
 def process_single_language(text: str, lang: str) -> str:
-    if lang == 'fa': return smart_correct_persian(text)
-    elif lang == 'ar': return smart_correct_arabic(text)
-    elif lang == 'en': return smart_correct_english(text)
-    elif lang == 'tr': return smart_correct_turkish(text)
+    if lang == 'fa': 
+        return fix_english_words_in_text(smart_correct_persian(text))
+    elif lang == 'ar': 
+        return fix_english_words_in_text(smart_correct_arabic(text))
+    elif lang == 'en': 
+        return fix_english_words_in_text(text)
+    elif lang == 'tr': 
+        return smart_correct_turkish(text)
     return text
 
 handler = Mangum(app)
